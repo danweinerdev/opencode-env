@@ -1,3 +1,6 @@
 [submodule "plugins/sdd-planner"]
 	path = plugins/sdd-planner
 	url = github.com:danweinerdev/sdd-planner.git
+[submodule "plugins/sdd-beads"]
+	path = plugins/sdd-beads
+	url = github.com:danweinerdev/sdd-beads.git
