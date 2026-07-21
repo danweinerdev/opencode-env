@@ -1,0 +1,3 @@
+[submodule "plugins/sdd-planner"]
+	path = plugins/sdd-planner
+	url = github.com:danweinerdev/sdd-planner.git
