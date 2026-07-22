@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "profiles": {
+    "orchestration": {
+      "model": "openai/gpt-5.6-sol",
+      "reasoning_effort": "high"
+    },
+    "reasoning": {
+      "model": "openai/gpt-5.6-terra",
+      "reasoning_effort": "medium"
+    },
+    "extraction": {
+      "model": "openai/gpt-5.6-luna-fast",
+      "reasoning_effort": "medium"
+    },
+    "bulk": {
+      "model": "llama.cpp/qwen3-coder-next-q4",
+      "startup_check": true,
+      "fallback": {
+        "model": "openai/gpt-5.6-luna-fast",
+        "reasoning_effort": "medium"
+      }
+    }
+  },
+  "roles": {
+    "orchestrator": "orchestration",
+    "reasoner": "reasoning",
+    "extractor": "extraction",
+    "bulk-researcher": "bulk",
+    "bounded-editor": "bulk",
+    "small-model": "bulk",
+    "summary": "bulk",
+    "compaction": "bulk",
+    "title": "bulk"
+  }
+}

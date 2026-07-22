@@ -6,6 +6,7 @@ Version-controlled OpenCode plugins, agents, skills, and runtime configuration.
 
 ```text
 plugins/<name>/                    registered Git submodules
+models.json                        global model-role defaults
 skills/<name>                      generated skill symlinks
 runtime/opencode/plugin.js         generated OpenCode plugin loader
 runtime/opencode/inventory.json    generated activation inventory
@@ -41,3 +42,8 @@ file://$HOME/.agents/runtime/opencode/plugin.js
 corresponding absolute file URI because JSON strings do not expand shell
 variables; `activate.sh --check` verifies that resolved URI without recording it
 in this repository.
+
+`opencode-frugal` resolves the first valid complete model profile from the
+active worktree's `.agents/models.json`, this repository's `models.json`, and
+finally its bundled defaults. Files are selected as a whole and are never
+merged.
