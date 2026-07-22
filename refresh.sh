@@ -150,4 +150,8 @@ for skill_name in "${SKILL_NAMES[@]}"; do
 done
 
 echo ">>> ${LINKED} skill(s) linked from ${PLUGIN_COUNT} plugin submodule(s)"
+echo ">>> activating declarative runtime plugins"
+if ! "${AGENTS_DIR}/activate.sh"; then
+    ERRORS=1
+fi
 exit ${ERRORS}

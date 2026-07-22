@@ -4,3 +4,6 @@
 [submodule "plugins/sdd-beads"]
 	path = plugins/sdd-beads
 	url = github.com:danweinerdev/sdd-beads.git
+[submodule "plugins/opencode-frugal"]
+	path = plugins/opencode-frugal
+	url = github.com:danweinerdev/opencode-frugal.git
