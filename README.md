@@ -47,3 +47,16 @@ in this repository.
 active worktree's `.agents/models.json`, this repository's `models.json`, and
 finally its bundled defaults. Files are selected as a whole and are never
 merged.
+
+`models.json` is intentionally ignored so each machine can choose providers
+and local-model availability independently. Create the GPT+Qwen global profile
+with:
+
+```sh
+cp "$HOME/.agents/plugins/opencode-frugal/examples/gpt-based.json.example" \
+  "$HOME/.agents/models.json"
+```
+
+For an Anthropic-only profile, copy `claude-based.json.example` instead.
+Restart OpenCode after changing the file because model routing is resolved at
+startup.
