@@ -43,7 +43,7 @@ corresponding absolute file URI because JSON strings do not expand shell
 variables; `activate.sh --check` verifies that resolved URI without recording it
 in this repository.
 
-`opencode-frugal` resolves the first valid complete model profile from the
+`opencode-model-router` resolves the first valid complete model profile from the
 active worktree's `.agents/models.json`, this repository's `models.json`, and
 finally its bundled defaults. Files are selected as a whole and are never
 merged.
@@ -53,7 +53,7 @@ and local-model availability independently. Create the GPT+Qwen global profile
 with:
 
 ```sh
-cp "$HOME/.agents/plugins/opencode-frugal/examples/gpt-based.json.example" \
+cp "$HOME/.agents/plugins/opencode-model-router/examples/gpt-based.json.example" \
   "$HOME/.agents/models.json"
 ```
 
