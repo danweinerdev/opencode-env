@@ -31,12 +31,13 @@ registered submodules. It never executes plugin-owned installer scripts.
 state. Use `activate.sh --check` to validate manifests and detect stale runtime
 state without changing files.
 
-The global OpenCode configuration loads the stable generated entry point:
+The global OpenCode configuration loads the stable generated entry point under:
 
-```json
-{
-  "plugin": [
-    "file:///home/daniel/.agents/runtime/opencode/plugin.js"
-  ]
-}
+```text
+file://$HOME/.agents/runtime/opencode/plugin.js
 ```
+
+`$HOME` above is documentation shorthand. The JSON configuration contains the
+corresponding absolute file URI because JSON strings do not expand shell
+variables; `activate.sh --check` verifies that resolved URI without recording it
+in this repository.
