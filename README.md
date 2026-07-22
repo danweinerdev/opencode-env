@@ -6,7 +6,7 @@ Version-controlled OpenCode plugins, agents, skills, and runtime configuration.
 
 ```text
 plugins/<name>/                    registered Git submodules
-models.json                        global model-role defaults
+models.json                        local global model-role defaults (ignored)
 skills/<name>                      generated skill symlinks
 runtime/opencode/plugin.js         generated OpenCode plugin loader
 runtime/opencode/inventory.json    generated activation inventory
