@@ -41,6 +41,56 @@ def registered_plugins(root: Path) -> list[Path]:
     return sorted(result)
 
 
+def disabled_plugin_names(root: Path) -> set[str]:
+    source = root / "disabled-plugins.txt"
+    if not source.is_file():
+        return set()
+    return {
+        line
+        for raw_line in source.read_text().splitlines()
+        if (line := raw_line.strip()) and not line.startswith("#")
+    }
+
+
+def validate_disabled_plugins(disabled: set[str], plugins: list[Path]) -> None:
+    registered = {plugin.name for plugin in plugins}
+    unknown = sorted(disabled - registered)
+    if unknown:
+        raise ManifestError(
+            f"unknown disabled plugin basename(s): {', '.join(unknown)}"
+        )
+
+
+def is_safe_skill_token(value: str) -> bool:
+    return bool(value) and value[0].isalnum() and all(
+        character.isalnum() or character in "._-" for character in value
+    )
+
+
+def disabled_skill_owners(root: Path, disabled: set[str], plugins: list[Path]) -> dict[str, str]:
+    source = root / "disabled-plugin-skills.txt"
+    if not source.is_file():
+        raise ManifestError(f"{source} is missing")
+    registered = {plugin.name for plugin in plugins}
+    owners: dict[str, str] = {}
+    for raw_line in source.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        fields = line.split()
+        if len(fields) != 2 or not all(is_safe_skill_token(field) for field in fields):
+            raise ManifestError(f"invalid disabled plugin skill inventory entry: {line}")
+        plugin, skill = fields
+        if plugin not in registered:
+            raise ManifestError(f"unknown disabled plugin basename in skill inventory: {plugin}")
+        if plugin not in disabled:
+            raise ManifestError(f"skill inventory plugin is not disabled: {plugin}")
+        if skill in owners:
+            raise ManifestError(f"disabled skill inventory collision: {skill}")
+        owners[skill] = plugin
+    return owners
+
+
 def contained_file(plugin: Path, relative: object, field: str) -> Path:
     if not isinstance(relative, str) or not relative:
         raise ManifestError(f"{plugin.name}: {field} must be a non-empty relative path")
@@ -62,7 +112,12 @@ def contained_file(plugin: Path, relative: object, field: str) -> Path:
 def load_runtime_plugins(root: Path) -> list[RuntimePlugin]:
     result: list[RuntimePlugin] = []
     owners: set[str] = set()
-    for plugin in registered_plugins(root):
+    registered = registered_plugins(root)
+    disabled = disabled_plugin_names(root)
+    validate_disabled_plugins(disabled, registered)
+    for plugin in registered:
+        if plugin.name in disabled:
+            continue
         manifest_path = plugin / ".agents-plugin" / "plugin.json"
         if not manifest_path.is_file():
             continue
@@ -172,7 +227,24 @@ def check(root: Path, files: dict[str, str]) -> list[str]:
     return errors
 
 
+def disabled_skills_remaining(root: Path, owners: dict[str, str]) -> list[str]:
+    return [
+        f"disabled skill remains under skills/: {skill} (owned by {owner})"
+        for skill, owner in sorted(owners.items())
+        if (root / "skills" / skill).exists() or (root / "skills" / skill).is_symlink()
+    ]
+
+
 def activate(root: Path, files: dict[str, str]) -> None:
+    # Recheck immediately before replacing runtime/.  refresh.sh normally
+    # removes these links first, but its reconciliation marker must not let a
+    # stale disabled skill be represented by a freshly generated runtime.
+    disabled = disabled_plugin_names(root)
+    owners = disabled_skill_owners(root, disabled, registered_plugins(root))
+    errors = disabled_skills_remaining(root, owners)
+    if errors:
+        raise ManifestError("; ".join(errors))
+
     runtime = root / "runtime"
     staging = Path(tempfile.mkdtemp(prefix=".runtime.", dir=root))
     backup = root / ".runtime.previous"
@@ -206,7 +278,10 @@ def main() -> int:
         plugins = load_runtime_plugins(root)
         files = expected_files(root, plugins)
         if args.check:
-            errors = check(root, files)
+            disabled = disabled_plugin_names(root)
+            errors = check(root, files) + disabled_skills_remaining(
+                root, disabled_skill_owners(root, disabled, registered_plugins(root))
+            )
             if errors:
                 for error in errors:
                     print(f"!!! {error}", file=sys.stderr)

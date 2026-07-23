@@ -51,6 +51,101 @@ if [[ ${#MODULE_PATHS[@]} -eq 0 ]]; then
     exit 1
 fi
 
+DISABLED_PLUGINS_FILE="${AGENTS_DIR}/disabled-plugins.txt"
+is_safe_basename() {
+    [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+}
+
+declare -A DISABLED_PLUGINS=()
+if [[ -f "${DISABLED_PLUGINS_FILE}" ]]; then
+    while IFS= read -r entry || [[ -n "${entry}" ]]; do
+        entry="${entry#"${entry%%[![:space:]]*}"}"
+        entry="${entry%"${entry##*[![:space:]]}"}"
+        [[ -z "${entry}" || "${entry}" == \#* ]] && continue
+        if ! is_safe_basename "${entry}"; then
+            echo "!!! invalid disabled plugin basename: ${entry}" >&2
+            exit 1
+        fi
+        if [[ -n "${DISABLED_PLUGINS[${entry}]:-}" ]]; then
+            echo "!!! duplicate disabled plugin basename: ${entry}" >&2
+            exit 1
+        fi
+        DISABLED_PLUGINS["${entry}"]=1
+    done < "${DISABLED_PLUGINS_FILE}"
+fi
+
+declare -A REGISTERED_PLUGINS=()
+for path in "${MODULE_PATHS[@]}"; do
+    REGISTERED_PLUGINS["$(basename "${path}")"]=1
+done
+for plugin_name in "${!DISABLED_PLUGINS[@]}"; do
+    if [[ -z "${REGISTERED_PLUGINS[${plugin_name}]:-}" ]]; then
+        echo "!!! unknown disabled plugin basename: ${plugin_name}" >&2
+        exit 1
+    fi
+done
+
+declare -A REGISTERED_PLUGIN_PATHS=()
+for path in "${MODULE_PATHS[@]}"; do
+    REGISTERED_PLUGIN_PATHS["$(basename "${path}")"]="${path}"
+done
+
+DISABLED_PLUGIN_SKILLS_FILE="${AGENTS_DIR}/disabled-plugin-skills.txt"
+if [[ ! -f "${DISABLED_PLUGIN_SKILLS_FILE}" ]]; then
+    echo "!!! ${DISABLED_PLUGIN_SKILLS_FILE} is missing" >&2
+    exit 1
+fi
+declare -A DISABLED_OWNER=()
+while IFS= read -r entry || [[ -n "${entry}" ]]; do
+    entry="${entry#"${entry%%[![:space:]]*}"}"
+    entry="${entry%"${entry##*[![:space:]]}"}"
+    [[ -z "${entry}" || "${entry}" == \#* ]] && continue
+    read -r inventory_plugin inventory_skill extra <<< "${entry}"
+    if [[ -z "${inventory_plugin:-}" || -z "${inventory_skill:-}" || -n "${extra:-}" ]] ||
+       ! is_safe_basename "${inventory_plugin}" || ! is_safe_basename "${inventory_skill}"; then
+        echo "!!! invalid disabled plugin skill inventory entry: ${entry}" >&2
+        exit 1
+    fi
+    if [[ -z "${REGISTERED_PLUGINS[${inventory_plugin}]:-}" ]]; then
+        echo "!!! unknown disabled plugin basename in skill inventory: ${inventory_plugin}" >&2
+        exit 1
+    fi
+    if [[ -z "${DISABLED_PLUGINS[${inventory_plugin}]:-}" ]]; then
+        echo "!!! skill inventory plugin is not disabled: ${inventory_plugin}" >&2
+        exit 1
+    fi
+    if [[ -n "${DISABLED_OWNER[${inventory_skill}]:-}" ]]; then
+        echo "!!! disabled skill inventory collision: '${inventory_skill}' owned by both" \
+             "'${DISABLED_OWNER[${inventory_skill}]}' and '${inventory_plugin}'" >&2
+        exit 1
+    fi
+    DISABLED_OWNER["${inventory_skill}"]="${inventory_plugin}"
+done < "${DISABLED_PLUGIN_SKILLS_FILE}"
+
+# Validate the trusted inventory and existing gitlinks before any enabled
+# submodule initialization, fetch, or merge can mutate a checkout.
+for plugin_name in "${!DISABLED_PLUGINS[@]}"; do
+    plugin="${AGENTS_DIR}/${REGISTERED_PLUGIN_PATHS[${plugin_name}]}"
+    [[ -d "${plugin}/skills" ]] || continue
+    for skill in "${plugin}"/skills/*/; do
+        [[ -f "${skill}/SKILL.md" ]] || continue
+        skill_name="$(basename "${skill}")"
+        if [[ "${DISABLED_OWNER[${skill_name}]:-}" != "${plugin_name}" ]]; then
+            echo "!!! disabled source skill is missing from trusted inventory: ${plugin_name} ${skill_name}" >&2
+            exit 1
+        fi
+    done
+done
+for path in "${MODULE_PATHS[@]}"; do
+    name="$(basename "${path}")"
+    [[ -n "${DISABLED_PLUGINS[${name}]:-}" ]] && continue
+    status="$(git -C "${AGENTS_DIR}" submodule status -- "${path}" 2>/dev/null || true)"
+    if [[ "${status:0:1}" == "+" || "${status:0:1}" == "U" ]]; then
+        echo "!!! ${path}: submodule gitlink differs from the index; resolve it before update" >&2
+        exit 1
+    fi
+done
+
 git -C "${AGENTS_DIR}" submodule sync --recursive
 
 initialize_missing_nested() {
@@ -72,11 +167,13 @@ initialize_missing_nested() {
     done < <(git -C "${repo}" config --file .gitmodules --get-regexp '^submodule\..*\.path$' || true)
 }
 
+declare -a UPDATED_GITLINKS=()
 for index in "${!MODULE_PATHS[@]}"; do
     module="${MODULE_NAMES[${index}]}"
     path="${MODULE_PATHS[${index}]}"
     plugin="${AGENTS_DIR}/${path}"
     name="$(basename "${path}")"
+    [[ -n "${DISABLED_PLUGINS[${name}]:-}" ]] && continue
 
     status="$(git -C "${AGENTS_DIR}" submodule status -- "${path}" 2>/dev/null || true)"
     if [[ "${status:0:1}" == "-" ]]; then
@@ -130,18 +227,19 @@ for index in "${!MODULE_PATHS[@]}"; do
         continue
     fi
 
-    before="$(git -C "${plugin}" rev-parse --short HEAD)"
+    before="$(git -C "${plugin}" rev-parse HEAD)"
     if git -C "${plugin}" merge-base --is-ancestor "origin/${branch}" HEAD; then
         echo ">>> ${name}: local checkout contains origin/${branch} (${before})"
     elif ! git -C "${plugin}" merge-base --is-ancestor HEAD "origin/${branch}"; then
         echo "!!! ${name}: has diverged from origin/${branch} — resolve manually" >&2
         ERRORS=1
     elif git -C "${plugin}" merge --ff-only --quiet "origin/${branch}"; then
-        after="$(git -C "${plugin}" rev-parse --short HEAD)"
+        after="$(git -C "${plugin}" rev-parse HEAD)"
         if [[ "${before}" == "${after}" ]]; then
             echo ">>> ${name}: up to date (${after})"
         else
             echo ">>> ${name}: ${before} -> ${after}"
+            UPDATED_GITLINKS+=("${path}=${after}")
         fi
         initialize_missing_nested "${plugin}"
     else
@@ -165,6 +263,11 @@ if [[ ${GITLINKS_DIFFER} -eq 1 ]]; then
 fi
 
 echo ">>> refreshing skill symlinks"
-"${AGENTS_DIR}/refresh.sh" || ERRORS=1
+if [[ ${#UPDATED_GITLINKS[@]} -gt 0 ]]; then
+    REFRESH_ALLOWED_UPDATED_GITLINKS="$(printf '%s\n' "${UPDATED_GITLINKS[@]}")" \
+        "${AGENTS_DIR}/refresh.sh" || ERRORS=1
+else
+    "${AGENTS_DIR}/refresh.sh" || ERRORS=1
+fi
 
 exit ${ERRORS}

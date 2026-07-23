@@ -1,0 +1,3 @@
+sdd-beads sdd-beads-execute
+sdd-beads sdd-beads-publish
+sdd-beads sdd-beads-reconcile
