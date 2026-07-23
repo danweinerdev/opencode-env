@@ -63,8 +63,7 @@ startup.
 
 Trusted projects may also commit exact routine verification commands in
 `.agents/verification-allowlist.json`. The model-router applies supported
-catalogue entries only to the implementer and bounded editor after the worktree
-is trusted through `OPENCODE_MODEL_ROUTER_TRUST_VERIFICATION_ALLOWLIST`; see the
-plugin README and
+catalogue entries only to the implementer and bounded editor whenever that valid
+file is present; see the plugin README and
 `plugins/opencode-model-router/examples/verification-allowlist.json.example`
 for the schema and Rust example.
