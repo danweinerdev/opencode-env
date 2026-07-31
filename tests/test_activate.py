@@ -65,7 +65,10 @@ class ActivateTests(unittest.TestCase):
             root = Path(directory)
             plugin = self.plugin(root)
             loaded = activate.load_runtime_plugins(root)
-            self.assertEqual(loaded, [activate.RuntimePlugin("example", plugin / "opencode" / "plugin.js")])
+            self.assertEqual(
+                loaded,
+                [activate.RuntimePlugin("example", (plugin / "opencode" / "plugin.js").resolve())],
+            )
 
     def test_parses_disabled_plugins_with_comments_and_blank_lines(self):
         with tempfile.TemporaryDirectory() as directory:

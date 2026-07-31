@@ -58,6 +58,17 @@ class RefreshTests(unittest.TestCase):
             self.assertTrue(enabled.is_symlink())
             self.assertEqual(os.readlink(enabled), "../plugins/enabled/skills/enabled")
 
+    def test_refreshes_when_disabled_lists_are_empty(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.setup_root(root, "", "")
+
+            result = subprocess.run(["bash", "refresh.sh"], cwd=root, text=True, capture_output=True)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((root / "skills" / "enabled").is_symlink())
+            self.assertTrue((root / "skills" / "disabled").is_symlink())
+
     def test_prunes_listed_disabled_link_when_source_is_missing(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -56,7 +56,28 @@ is_safe_basename() {
     [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
 }
 
-declare -A DISABLED_PLUGINS=()
+declare -a DISABLED_PLUGINS=()
+contains() {
+    local needle="$1" item
+    shift
+    for item in "$@"; do
+        [[ "${item}" == "${needle}" ]] && return 0
+    done
+    return 1
+}
+
+registered_path_for() {
+    local wanted="$1" index
+    REGISTERED_PATH=""
+    for index in "${!MODULE_PATHS[@]}"; do
+        if [[ "$(basename "${MODULE_PATHS[${index}]}")" == "${wanted}" ]]; then
+            REGISTERED_PATH="${MODULE_PATHS[${index}]}"
+            return 0
+        fi
+    done
+    return 1
+}
+
 if [[ -f "${DISABLED_PLUGINS_FILE}" ]]; then
     while IFS= read -r entry || [[ -n "${entry}" ]]; do
         entry="${entry#"${entry%%[![:space:]]*}"}"
@@ -66,28 +87,20 @@ if [[ -f "${DISABLED_PLUGINS_FILE}" ]]; then
             echo "!!! invalid disabled plugin basename: ${entry}" >&2
             exit 1
         fi
-        if [[ -n "${DISABLED_PLUGINS[${entry}]:-}" ]]; then
+        if contains "${entry}" "${DISABLED_PLUGINS[@]+"${DISABLED_PLUGINS[@]}"}"; then
             echo "!!! duplicate disabled plugin basename: ${entry}" >&2
             exit 1
         fi
-        DISABLED_PLUGINS["${entry}"]=1
+        DISABLED_PLUGINS+=("${entry}")
     done < "${DISABLED_PLUGINS_FILE}"
 fi
 
-declare -A REGISTERED_PLUGINS=()
-for path in "${MODULE_PATHS[@]}"; do
-    REGISTERED_PLUGINS["$(basename "${path}")"]=1
-done
-for plugin_name in "${!DISABLED_PLUGINS[@]}"; do
-    if [[ -z "${REGISTERED_PLUGINS[${plugin_name}]:-}" ]]; then
+for ((index = 0; index < ${#DISABLED_PLUGINS[@]}; index++)); do
+    plugin_name="${DISABLED_PLUGINS[${index}]}"
+    if ! registered_path_for "${plugin_name}"; then
         echo "!!! unknown disabled plugin basename: ${plugin_name}" >&2
         exit 1
     fi
-done
-
-declare -A REGISTERED_PLUGIN_PATHS=()
-for path in "${MODULE_PATHS[@]}"; do
-    REGISTERED_PLUGIN_PATHS["$(basename "${path}")"]="${path}"
 done
 
 DISABLED_PLUGIN_SKILLS_FILE="${AGENTS_DIR}/disabled-plugin-skills.txt"
@@ -95,7 +108,20 @@ if [[ ! -f "${DISABLED_PLUGIN_SKILLS_FILE}" ]]; then
     echo "!!! ${DISABLED_PLUGIN_SKILLS_FILE} is missing" >&2
     exit 1
 fi
-declare -A DISABLED_OWNER=()
+declare -a DISABLED_SKILL_NAMES=()
+declare -a DISABLED_SKILL_OWNERS=()
+disabled_owner_for() {
+    local wanted="$1" index
+    DISABLED_OWNER_VALUE=""
+    for ((index = 0; index < ${#DISABLED_SKILL_NAMES[@]}; index++)); do
+        if [[ "${DISABLED_SKILL_NAMES[${index}]}" == "${wanted}" ]]; then
+            DISABLED_OWNER_VALUE="${DISABLED_SKILL_OWNERS[${index}]}"
+            return 0
+        fi
+    done
+    return 1
+}
+
 while IFS= read -r entry || [[ -n "${entry}" ]]; do
     entry="${entry#"${entry%%[![:space:]]*}"}"
     entry="${entry%"${entry##*[![:space:]]}"}"
@@ -106,31 +132,36 @@ while IFS= read -r entry || [[ -n "${entry}" ]]; do
         echo "!!! invalid disabled plugin skill inventory entry: ${entry}" >&2
         exit 1
     fi
-    if [[ -z "${REGISTERED_PLUGINS[${inventory_plugin}]:-}" ]]; then
+    if ! registered_path_for "${inventory_plugin}"; then
         echo "!!! unknown disabled plugin basename in skill inventory: ${inventory_plugin}" >&2
         exit 1
     fi
-    if [[ -z "${DISABLED_PLUGINS[${inventory_plugin}]:-}" ]]; then
+    if ! contains "${inventory_plugin}" "${DISABLED_PLUGINS[@]+"${DISABLED_PLUGINS[@]}"}"; then
         echo "!!! skill inventory plugin is not disabled: ${inventory_plugin}" >&2
         exit 1
     fi
-    if [[ -n "${DISABLED_OWNER[${inventory_skill}]:-}" ]]; then
+    disabled_owner_for "${inventory_skill}" || true
+    if [[ -n "${DISABLED_OWNER_VALUE}" ]]; then
         echo "!!! disabled skill inventory collision: '${inventory_skill}' owned by both" \
-             "'${DISABLED_OWNER[${inventory_skill}]}' and '${inventory_plugin}'" >&2
+             "'${DISABLED_OWNER_VALUE}' and '${inventory_plugin}'" >&2
         exit 1
     fi
-    DISABLED_OWNER["${inventory_skill}"]="${inventory_plugin}"
+    DISABLED_SKILL_NAMES+=("${inventory_skill}")
+    DISABLED_SKILL_OWNERS+=("${inventory_plugin}")
 done < "${DISABLED_PLUGIN_SKILLS_FILE}"
 
 # Validate the trusted inventory and existing gitlinks before any enabled
 # submodule initialization, fetch, or merge can mutate a checkout.
-for plugin_name in "${!DISABLED_PLUGINS[@]}"; do
-    plugin="${AGENTS_DIR}/${REGISTERED_PLUGIN_PATHS[${plugin_name}]}"
+for ((index = 0; index < ${#DISABLED_PLUGINS[@]}; index++)); do
+    plugin_name="${DISABLED_PLUGINS[${index}]}"
+    registered_path_for "${plugin_name}"
+    plugin="${AGENTS_DIR}/${REGISTERED_PATH}"
     [[ -d "${plugin}/skills" ]] || continue
     for skill in "${plugin}"/skills/*/; do
         [[ -f "${skill}/SKILL.md" ]] || continue
         skill_name="$(basename "${skill}")"
-        if [[ "${DISABLED_OWNER[${skill_name}]:-}" != "${plugin_name}" ]]; then
+        disabled_owner_for "${skill_name}" || true
+        if [[ "${DISABLED_OWNER_VALUE}" != "${plugin_name}" ]]; then
             echo "!!! disabled source skill is missing from trusted inventory: ${plugin_name} ${skill_name}" >&2
             exit 1
         fi
@@ -138,7 +169,7 @@ for plugin_name in "${!DISABLED_PLUGINS[@]}"; do
 done
 for path in "${MODULE_PATHS[@]}"; do
     name="$(basename "${path}")"
-    [[ -n "${DISABLED_PLUGINS[${name}]:-}" ]] && continue
+    contains "${name}" "${DISABLED_PLUGINS[@]+"${DISABLED_PLUGINS[@]}"}" && continue
     status="$(git -C "${AGENTS_DIR}" submodule status -- "${path}" 2>/dev/null || true)"
     if [[ "${status:0:1}" == "+" || "${status:0:1}" == "U" ]]; then
         echo "!!! ${path}: submodule gitlink differs from the index; resolve it before update" >&2
@@ -173,7 +204,7 @@ for index in "${!MODULE_PATHS[@]}"; do
     path="${MODULE_PATHS[${index}]}"
     plugin="${AGENTS_DIR}/${path}"
     name="$(basename "${path}")"
-    [[ -n "${DISABLED_PLUGINS[${name}]:-}" ]] && continue
+    contains "${name}" "${DISABLED_PLUGINS[@]+"${DISABLED_PLUGINS[@]}"}" && continue
 
     status="$(git -C "${AGENTS_DIR}" submodule status -- "${path}" 2>/dev/null || true)"
     if [[ "${status:0:1}" == "-" ]]; then

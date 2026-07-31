@@ -69,7 +69,28 @@ is_safe_basename() {
 }
 
 DISABLED_PLUGINS_FILE="${AGENTS_DIR}/disabled-plugins.txt"
-declare -A DISABLED_PLUGINS=()
+declare -a DISABLED_PLUGINS=()
+contains() {
+    local needle="$1" item
+    shift
+    for item in "$@"; do
+        [[ "${item}" == "${needle}" ]] && return 0
+    done
+    return 1
+}
+
+registered_path_for() {
+    local wanted="$1" path
+    REGISTERED_PATH=""
+    for path in "${PLUGIN_PATHS[@]}"; do
+        if [[ "$(basename "${path}")" == "${wanted}" ]]; then
+            REGISTERED_PATH="${path}"
+            return 0
+        fi
+    done
+    return 1
+}
+
 if [[ -f "${DISABLED_PLUGINS_FILE}" ]]; then
     while IFS= read -r entry || [[ -n "${entry}" ]]; do
         entry="${entry#"${entry%%[![:space:]]*}"}"
@@ -79,23 +100,17 @@ if [[ -f "${DISABLED_PLUGINS_FILE}" ]]; then
             echo "!!! invalid disabled plugin basename: ${entry}" >&2
             exit 1
         fi
-        if [[ -n "${DISABLED_PLUGINS[${entry}]:-}" ]]; then
+        if contains "${entry}" "${DISABLED_PLUGINS[@]+"${DISABLED_PLUGINS[@]}"}"; then
             echo "!!! duplicate disabled plugin basename: ${entry}" >&2
             exit 1
         fi
-        DISABLED_PLUGINS["${entry}"]=1
+        DISABLED_PLUGINS+=("${entry}")
     done < "${DISABLED_PLUGINS_FILE}"
 fi
 
-declare -A REGISTERED_PLUGINS=()
-declare -A REGISTERED_PLUGIN_PATHS=()
-for path in "${PLUGIN_PATHS[@]}"; do
-    plugin_name="$(basename "${path}")"
-    REGISTERED_PLUGINS["${plugin_name}"]=1
-    REGISTERED_PLUGIN_PATHS["${plugin_name}"]="${path}"
-done
-for plugin_name in "${!DISABLED_PLUGINS[@]}"; do
-    if [[ -z "${REGISTERED_PLUGINS[${plugin_name}]:-}" ]]; then
+for ((index = 0; index < ${#DISABLED_PLUGINS[@]}; index++)); do
+    plugin_name="${DISABLED_PLUGINS[${index}]}"
+    if ! registered_path_for "${plugin_name}"; then
         echo "!!! unknown disabled plugin basename: ${plugin_name}" >&2
         exit 1
     fi
@@ -109,7 +124,20 @@ if [[ ! -f "${DISABLED_PLUGIN_SKILLS_FILE}" ]]; then
     echo "!!! ${DISABLED_PLUGIN_SKILLS_FILE} is missing" >&2
     exit 1
 fi
-declare -A DISABLED_OWNER=()  # disabled skill name -> plugin name
+declare -a DISABLED_SKILL_NAMES=()
+declare -a DISABLED_SKILL_OWNERS=()
+disabled_owner_for() {
+    local wanted="$1" index
+    DISABLED_OWNER_VALUE=""
+    for ((index = 0; index < ${#DISABLED_SKILL_NAMES[@]}; index++)); do
+        if [[ "${DISABLED_SKILL_NAMES[${index}]}" == "${wanted}" ]]; then
+            DISABLED_OWNER_VALUE="${DISABLED_SKILL_OWNERS[${index}]}"
+            return 0
+        fi
+    done
+    return 1
+}
+
 while IFS= read -r entry || [[ -n "${entry}" ]]; do
     entry="${entry#"${entry%%[![:space:]]*}"}"
     entry="${entry%"${entry##*[![:space:]]}"}"
@@ -120,31 +148,36 @@ while IFS= read -r entry || [[ -n "${entry}" ]]; do
         echo "!!! invalid disabled plugin skill inventory entry: ${entry}" >&2
         exit 1
     fi
-    if [[ -z "${REGISTERED_PLUGINS[${inventory_plugin}]:-}" ]]; then
+    if ! registered_path_for "${inventory_plugin}"; then
         echo "!!! unknown disabled plugin basename in skill inventory: ${inventory_plugin}" >&2
         exit 1
     fi
-    if [[ -z "${DISABLED_PLUGINS[${inventory_plugin}]:-}" ]]; then
+    if ! contains "${inventory_plugin}" "${DISABLED_PLUGINS[@]+"${DISABLED_PLUGINS[@]}"}"; then
         echo "!!! skill inventory plugin is not disabled: ${inventory_plugin}" >&2
         exit 1
     fi
-    if [[ -n "${DISABLED_OWNER[${inventory_skill}]:-}" ]]; then
+    disabled_owner_for "${inventory_skill}" || true
+    if [[ -n "${DISABLED_OWNER_VALUE}" ]]; then
         echo "!!! disabled skill inventory collision: '${inventory_skill}' owned by both" \
-             "'${DISABLED_OWNER[${inventory_skill}]}' and '${inventory_plugin}'" >&2
+             "'${DISABLED_OWNER_VALUE}' and '${inventory_plugin}'" >&2
         exit 1
     fi
-    DISABLED_OWNER["${inventory_skill}"]="${inventory_plugin}"
+    DISABLED_SKILL_NAMES+=("${inventory_skill}")
+    DISABLED_SKILL_OWNERS+=("${inventory_plugin}")
 done < "${DISABLED_PLUGIN_SKILLS_FILE}"
 
 # If a disabled checkout is available, its current skills must all be named in
 # the checked-in inventory.  Do this before touching enabled submodules.
-for plugin_name in "${!DISABLED_PLUGINS[@]}"; do
-    plugin="${AGENTS_DIR}/${REGISTERED_PLUGIN_PATHS[${plugin_name}]}"
+for ((index = 0; index < ${#DISABLED_PLUGINS[@]}; index++)); do
+    plugin_name="${DISABLED_PLUGINS[${index}]}"
+    registered_path_for "${plugin_name}"
+    plugin="${AGENTS_DIR}/${REGISTERED_PATH}"
     [[ -d "${plugin}/skills" ]] || continue
     for skill in "${plugin}"/skills/*/; do
         [[ -f "${skill}/SKILL.md" ]] || continue
         skill_name="$(basename "${skill}")"
-        if [[ "${DISABLED_OWNER[${skill_name}]:-}" != "${plugin_name}" ]]; then
+        disabled_owner_for "${skill_name}" || true
+        if [[ "${DISABLED_OWNER_VALUE}" != "${plugin_name}" ]]; then
             echo "!!! disabled source skill is missing from trusted inventory: ${plugin_name} ${skill_name}" >&2
             exit 1
         fi
@@ -153,11 +186,20 @@ done
 
 # update.sh may allow only exact path=checkout-oid pairs that it advanced
 # itself. A conflict is never allowed, and a plain refresh has no allowances.
-declare -A ALLOWED_UPDATED_GITLINKS=()
-declare -A REGISTERED_PATHS=()
-for path in "${PLUGIN_PATHS[@]}"; do
-    REGISTERED_PATHS["${path}"]=1
-done
+declare -a ALLOWED_GITLINK_PATHS=()
+declare -a ALLOWED_GITLINK_OIDS=()
+allowed_oid_for() {
+    local wanted="$1" index
+    ALLOWED_OID_VALUE=""
+    for ((index = 0; index < ${#ALLOWED_GITLINK_PATHS[@]}; index++)); do
+        if [[ "${ALLOWED_GITLINK_PATHS[${index}]}" == "${wanted}" ]]; then
+            ALLOWED_OID_VALUE="${ALLOWED_GITLINK_OIDS[${index}]}"
+            return 0
+        fi
+    done
+    return 1
+}
+
 if [[ -n "${REFRESH_ALLOWED_UPDATED_GITLINKS:-}" ]]; then
     while IFS= read -r entry; do
         if ! [[ "${entry}" =~ ^plugins/([A-Za-z0-9][A-Za-z0-9._-]*/)*[A-Za-z0-9][A-Za-z0-9._-]*=[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
@@ -166,16 +208,16 @@ if [[ -n "${REFRESH_ALLOWED_UPDATED_GITLINKS:-}" ]]; then
         fi
         path="${entry%%=*}"
         oid="${entry#*=}"
-        if [[ -z "${REGISTERED_PATHS[${path}]:-}" ]]; then
+        if ! contains "${path}" "${PLUGIN_PATHS[@]}"; then
             echo "!!! unregistered REFRESH_ALLOWED_UPDATED_GITLINKS path: ${path}" >&2
             exit 1
         fi
         plugin_name="$(basename "${path}")"
-        if [[ -n "${DISABLED_PLUGINS[${plugin_name}]:-}" ]]; then
+        if contains "${plugin_name}" "${DISABLED_PLUGINS[@]+"${DISABLED_PLUGINS[@]}"}"; then
             echo "!!! disabled REFRESH_ALLOWED_UPDATED_GITLINKS path: ${path}" >&2
             exit 1
         fi
-        if [[ -n "${ALLOWED_UPDATED_GITLINKS[${path}]:-}" ]]; then
+        if contains "${path}" "${ALLOWED_GITLINK_PATHS[@]+"${ALLOWED_GITLINK_PATHS[@]}"}"; then
             echo "!!! duplicate REFRESH_ALLOWED_UPDATED_GITLINKS path: ${path}" >&2
             exit 1
         fi
@@ -184,14 +226,19 @@ if [[ -n "${REFRESH_ALLOWED_UPDATED_GITLINKS:-}" ]]; then
             echo "!!! ${path}: REFRESH_ALLOWED_UPDATED_GITLINKS OID does not match checkout HEAD" >&2
             exit 1
         fi
-        ALLOWED_UPDATED_GITLINKS["${path}"]="${oid}"
+        ALLOWED_GITLINK_PATHS+=("${path}")
+        ALLOWED_GITLINK_OIDS+=("${oid}")
     done <<< "${REFRESH_ALLOWED_UPDATED_GITLINKS}"
 fi
 for path in "${PLUGIN_PATHS[@]}"; do
     plugin_name="$(basename "${path}")"
-    [[ -n "${DISABLED_PLUGINS[${plugin_name}]:-}" ]] && continue
-    mapfile -t index_entries < <(git -C "${AGENTS_DIR}" ls-files --stage -- "${path}")
-    for index_entry in "${index_entries[@]}"; do
+    contains "${plugin_name}" "${DISABLED_PLUGINS[@]+"${DISABLED_PLUGINS[@]}"}" && continue
+    index_entries=()
+    while IFS= read -r index_entry; do
+        index_entries+=("${index_entry}")
+    done < <(git -C "${AGENTS_DIR}" ls-files --stage -- "${path}")
+    for ((index = 0; index < ${#index_entries[@]}; index++)); do
+        index_entry="${index_entries[${index}]}"
         read -r index_mode recorded_oid index_stage indexed_path <<< "${index_entry}"
         if [[ "${index_stage}" != "0" ]]; then
             echo "!!! ${path}: submodule gitlink has unmerged index entries; resolve it first" >&2
@@ -208,9 +255,10 @@ for path in "${PLUGIN_PATHS[@]}"; do
         exit 1
     fi
     checked_out="$(git -C "${AGENTS_DIR}/${path}" rev-parse --verify HEAD 2>/dev/null || true)"
+    allowed_oid_for "${path}" || true
     if [[ -n "${checked_out}" ]] &&
-       { { [[ "${recorded_oid}" != "${checked_out}" ]] && [[ "${ALLOWED_UPDATED_GITLINKS[${path}]:-}" != "${checked_out}" ]]; } ||
-         { [[ "${recorded_oid}" == "${checked_out}" ]] && [[ -n "${ALLOWED_UPDATED_GITLINKS[${path}]:-}" ]]; }; }; then
+       { { [[ "${recorded_oid}" != "${checked_out}" ]] && [[ "${ALLOWED_OID_VALUE}" != "${checked_out}" ]]; } ||
+          { [[ "${recorded_oid}" == "${checked_out}" ]] && [[ -n "${ALLOWED_OID_VALUE}" ]]; }; }; then
         echo "!!! ${path}: submodule gitlink differs from the index; run update.sh or resolve it first" >&2
         exit 1
     fi
@@ -241,7 +289,7 @@ initialize_missing_nested() {
 for path in "${PLUGIN_PATHS[@]}"; do
     plugin="${AGENTS_DIR}/${path}"
     plugin_name="$(basename "${path}")"
-    [[ -n "${DISABLED_PLUGINS[${plugin_name}]:-}" ]] && continue
+    contains "${plugin_name}" "${DISABLED_PLUGINS[@]+"${DISABLED_PLUGINS[@]}"}" && continue
     status="$(git -C "${AGENTS_DIR}" submodule status -- "${path}" 2>/dev/null || true)"
     if [[ "${status:0:1}" == "-" ]]; then
         echo ">>> init: ${path}"
@@ -251,16 +299,30 @@ for path in "${PLUGIN_PATHS[@]}"; do
 done
 
 # --- 3. Build skill inventories from available plugin sources. ---------------
-declare -A OWNER=()            # skill name -> plugin name
-declare -A EXPECTED_TARGET=()  # skill name -> relative symlink target
 declare -a SKILL_NAMES=()
+declare -a SKILL_OWNERS=()
+declare -a SKILL_TARGETS=()
+skill_details_for() {
+    local wanted="$1" index
+    SKILL_OWNER_VALUE=""
+    SKILL_TARGET_VALUE=""
+    for ((index = 0; index < ${#SKILL_NAMES[@]}; index++)); do
+        if [[ "${SKILL_NAMES[${index}]}" == "${wanted}" ]]; then
+            SKILL_OWNER_VALUE="${SKILL_OWNERS[${index}]}"
+            SKILL_TARGET_VALUE="${SKILL_TARGETS[${index}]}"
+            return 0
+        fi
+    done
+    return 1
+}
+
 ERRORS=0
 PLUGIN_COUNT=0
 
 for path in "${PLUGIN_PATHS[@]}"; do
     plugin="${AGENTS_DIR}/${path}/"
     plugin_name="$(basename "${path}")"
-    [[ -n "${DISABLED_PLUGINS[${plugin_name}]:-}" ]] && continue
+    contains "${plugin_name}" "${DISABLED_PLUGINS[@]+"${DISABLED_PLUGINS[@]}"}" && continue
     [[ -d "${plugin}/skills" ]] || { echo ">>> skip: ${plugin_name} (no skills/)"; continue; }
     PLUGIN_COUNT=$((PLUGIN_COUNT + 1))
 
@@ -269,21 +331,23 @@ for path in "${PLUGIN_PATHS[@]}"; do
         skill_name="$(basename "${skill}")"
         target="../${path}/skills/${skill_name}"
 
-        if [[ -n "${DISABLED_OWNER[${skill_name}]:-}" ]]; then
+        disabled_owner_for "${skill_name}" || true
+        if [[ -n "${DISABLED_OWNER_VALUE}" ]]; then
             echo "!!! collision: skill '${skill_name}' is enabled from '${plugin_name}'" \
-                 "and disabled from '${DISABLED_OWNER[${skill_name}]}'" >&2
+                 "and disabled from '${DISABLED_OWNER_VALUE}'" >&2
             ERRORS=1
             continue
         fi
-        if [[ -n "${OWNER[${skill_name}]:-}" ]]; then
+        skill_details_for "${skill_name}" || true
+        if [[ -n "${SKILL_OWNER_VALUE}" ]]; then
             echo "!!! collision: skill '${skill_name}' provided by both" \
-                 "'${OWNER[${skill_name}]}' and '${plugin_name}' — keeping the former" >&2
+                 "'${SKILL_OWNER_VALUE}' and '${plugin_name}' — keeping the former" >&2
             ERRORS=1
             continue
         fi
-        OWNER[${skill_name}]="${plugin_name}"
-        EXPECTED_TARGET[${skill_name}]="${target}"
         SKILL_NAMES+=("${skill_name}")
+        SKILL_OWNERS+=("${plugin_name}")
+        SKILL_TARGETS+=("${target}")
     done
 done
 
@@ -293,21 +357,24 @@ done
 # --- 4. Prune links and quarantine copied disabled-plugin skills. -----------
 for link in "${SKILLS_DIR}"/*; do
     skill_name="$(basename "${link}")"
-    if [[ -L "${link}" && -n "${DISABLED_OWNER[${skill_name}]:-}" ]]; then
+    disabled_owner_for "${skill_name}" || true
+    skill_details_for "${skill_name}" || true
+    if [[ -L "${link}" && -n "${DISABLED_OWNER_VALUE}" ]]; then
         echo ">>> prune: skills/${skill_name} (listed for disabled plugin)"
         rm "${link}"
-    elif [[ -L "${link}" && -z "${EXPECTED_TARGET[${skill_name}]:-}" ]]; then
+    elif [[ -L "${link}" && -z "${SKILL_TARGET_VALUE}" ]]; then
         echo ">>> prune: skills/${skill_name} (not provided by a registered plugin)"
         rm "${link}"
-    elif [[ -n "${DISABLED_OWNER[${skill_name}]:-}" && ! -L "${link}" && ( -f "${link}" || -d "${link}" ) ]]; then
-        plugin_name="${DISABLED_OWNER[${skill_name}]}"
-        source="${AGENTS_DIR}/${REGISTERED_PLUGIN_PATHS[${plugin_name}]}/skills/${skill_name}"
+    elif [[ -n "${DISABLED_OWNER_VALUE}" && ! -L "${link}" && ( -f "${link}" || -d "${link}" ) ]]; then
+        plugin_name="${DISABLED_OWNER_VALUE}"
+        registered_path_for "${plugin_name}"
+        source="${AGENTS_DIR}/${REGISTERED_PATH}/skills/${skill_name}"
         if [[ ! -d "${source}" || ! -f "${source}/SKILL.md" ]]; then
             echo "!!! cannot quarantine skills/${skill_name}: disabled source is unavailable" >&2
             ERRORS=1
             continue
         fi
-        if ! diff -qr --no-dereference "${source}" "${link}" >/dev/null; then
+        if ! git diff --no-index --quiet --no-ext-diff -- "${source}" "${link}"; then
             echo "!!! refusing to quarantine skills/${skill_name}: content differs from disabled source" >&2
             ERRORS=1
             continue
@@ -345,8 +412,10 @@ done
 
 # --- 5. Create or repair the expected relative symlinks. --------------------
 LINKED=0
-for skill_name in "${SKILL_NAMES[@]}"; do
-    target="${EXPECTED_TARGET[${skill_name}]}"
+for ((index = 0; index < ${#SKILL_NAMES[@]}; index++)); do
+    skill_name="${SKILL_NAMES[${index}]}"
+    skill_details_for "${skill_name}"
+    target="${SKILL_TARGET_VALUE}"
     link="${SKILLS_DIR}/${skill_name}"
 
     if [[ -L "${link}" ]]; then
