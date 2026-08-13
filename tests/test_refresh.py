@@ -69,6 +69,37 @@ class RefreshTests(unittest.TestCase):
             self.assertTrue((root / "skills" / "enabled").is_symlink())
             self.assertTrue((root / "skills" / "disabled").is_symlink())
 
+    def test_links_skills_from_opencode_plugin_distribution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.setup_root(root, "disabled\n")
+            plugin = root / "plugins" / "enabled"
+            portable = plugin / ".opencode-plugin"
+            (portable / "skills" / "portable").mkdir(parents=True)
+            (portable / "skills" / "portable" / "SKILL.md").write_text("portable")
+            (portable / "plugin.json").write_text('{"name":"enabled","skills":"./skills/"}\n')
+            subprocess.run(["git", "add", "."], cwd=plugin, check=True)
+            subprocess.run(["git", "commit", "--quiet", "-m", "add portable tree"], cwd=plugin, check=True)
+            oid = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=plugin, check=True, text=True, capture_output=True
+            ).stdout.strip()
+            subprocess.run(
+                ["git", "update-index", "--add", "--cacheinfo", f"160000,{oid},plugins/enabled"],
+                cwd=root,
+                check=True,
+            )
+
+            result = subprocess.run(["bash", "refresh.sh"], cwd=root, text=True, capture_output=True)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            portable_link = root / "skills" / "portable"
+            self.assertTrue(portable_link.is_symlink())
+            self.assertEqual(
+                os.readlink(portable_link),
+                "../plugins/enabled/.opencode-plugin/skills/portable",
+            )
+            self.assertFalse((root / "skills" / "enabled").exists())
+
     def test_prunes_listed_disabled_link_when_source_is_missing(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -111,6 +142,23 @@ class RefreshTests(unittest.TestCase):
             preserved = root / ".disabled-skills" / "disabled" / "disabled"
             self.assertTrue(preserved.is_dir())
             self.assertEqual((preserved / "SKILL.md").read_text(), "disabled")
+
+    def test_quarantines_from_disabled_opencode_plugin_distribution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.setup_root(root, "disabled\n")
+            plugin = root / "plugins" / "disabled"
+            portable = plugin / ".opencode-plugin"
+            (portable / "skills" / "disabled").mkdir(parents=True)
+            (portable / "skills" / "disabled" / "SKILL.md").write_text("portable disabled")
+            (portable / "plugin.json").write_text('{"name":"disabled","skills":"./skills/"}\n')
+            shutil.copytree(portable / "skills" / "disabled", root / "skills" / "disabled")
+
+            result = subprocess.run(["bash", "refresh.sh"], cwd=root, text=True, capture_output=True)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            preserved = root / ".disabled-skills" / "disabled" / "disabled"
+            self.assertEqual((preserved / "SKILL.md").read_text(), "portable disabled")
 
     def test_refuses_differing_copied_disabled_skill(self):
         with tempfile.TemporaryDirectory() as directory:

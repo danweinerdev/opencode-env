@@ -2,8 +2,8 @@
 # refresh.sh — maintain ~/.agents as an aggregator of skill plugins.
 #
 # Layout:
-#   ~/.agents/plugins/<name>/   git submodule for a skills plugin (skills/ + shared/)
-#   ~/.agents/skills/<skill>    RELATIVE symlink -> ../plugins/<name>/skills/<skill>
+#   ~/.agents/plugins/<name>/   git submodule containing skills/ or .opencode-plugin/
+#   ~/.agents/skills/<skill>    RELATIVE symlink -> the plugin's OpenCode skill
 #
 # Agent runtimes (e.g. opencode) discover skills via ~/.agents/skills/*/SKILL.md.
 # Relative symlinks keep the whole tree self-contained, so bind-mounting
@@ -66,6 +66,15 @@ fi
 
 is_safe_basename() {
     [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+}
+
+plugin_source_root() {
+    local checkout="$1"
+    if [[ -f "${checkout}/.opencode-plugin/plugin.json" ]]; then
+        printf '%s' "${checkout}/.opencode-plugin"
+    else
+        printf '%s' "${checkout}"
+    fi
 }
 
 DISABLED_PLUGINS_FILE="${AGENTS_DIR}/disabled-plugins.txt"
@@ -171,7 +180,7 @@ done < "${DISABLED_PLUGIN_SKILLS_FILE}"
 for ((index = 0; index < ${#DISABLED_PLUGINS[@]}; index++)); do
     plugin_name="${DISABLED_PLUGINS[${index}]}"
     registered_path_for "${plugin_name}"
-    plugin="${AGENTS_DIR}/${REGISTERED_PATH}"
+    plugin="$(plugin_source_root "${AGENTS_DIR}/${REGISTERED_PATH}")"
     [[ -d "${plugin}/skills" ]] || continue
     for skill in "${plugin}"/skills/*/; do
         [[ -f "${skill}/SKILL.md" ]] || continue
@@ -320,7 +329,7 @@ ERRORS=0
 PLUGIN_COUNT=0
 
 for path in "${PLUGIN_PATHS[@]}"; do
-    plugin="${AGENTS_DIR}/${path}/"
+    plugin="$(plugin_source_root "${AGENTS_DIR}/${path}")/"
     plugin_name="$(basename "${path}")"
     contains "${plugin_name}" "${DISABLED_PLUGINS[@]+"${DISABLED_PLUGINS[@]}"}" && continue
     [[ -d "${plugin}/skills" ]] || { echo ">>> skip: ${plugin_name} (no skills/)"; continue; }
@@ -329,7 +338,11 @@ for path in "${PLUGIN_PATHS[@]}"; do
     for skill in "${plugin}"skills/*/; do
         [[ -f "${skill}/SKILL.md" ]] || continue
         skill_name="$(basename "${skill}")"
-        target="../${path}/skills/${skill_name}"
+        if [[ "${plugin}" == "${AGENTS_DIR}/${path}/.opencode-plugin/" ]]; then
+            target="../${path}/.opencode-plugin/skills/${skill_name}"
+        else
+            target="../${path}/skills/${skill_name}"
+        fi
 
         disabled_owner_for "${skill_name}" || true
         if [[ -n "${DISABLED_OWNER_VALUE}" ]]; then
@@ -368,7 +381,8 @@ for link in "${SKILLS_DIR}"/*; do
     elif [[ -n "${DISABLED_OWNER_VALUE}" && ! -L "${link}" && ( -f "${link}" || -d "${link}" ) ]]; then
         plugin_name="${DISABLED_OWNER_VALUE}"
         registered_path_for "${plugin_name}"
-        source="${AGENTS_DIR}/${REGISTERED_PATH}/skills/${skill_name}"
+        source_root="$(plugin_source_root "${AGENTS_DIR}/${REGISTERED_PATH}")"
+        source="${source_root}/skills/${skill_name}"
         if [[ ! -d "${source}" || ! -f "${source}/SKILL.md" ]]; then
             echo "!!! cannot quarantine skills/${skill_name}: disabled source is unavailable" >&2
             ERRORS=1

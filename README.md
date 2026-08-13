@@ -15,7 +15,10 @@ runtime/opencode/plugin.js         generated OpenCode plugin loader
 runtime/opencode/inventory.json    generated activation inventory
 ```
 
-Plugins expose skills through `skills/*/SKILL.md`. A plugin can additionally
+Plugins expose skills through `skills/*/SKILL.md`, or through an OpenCode
+distribution rooted at `.opencode-plugin/` when that directory contains a
+`plugin.json`. The OpenCode distribution takes precedence over root-level
+skills. A plugin can additionally
 declare an OpenCode runtime module in `.agents-plugin/plugin.json`:
 
 ```json

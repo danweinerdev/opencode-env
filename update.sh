@@ -56,6 +56,15 @@ is_safe_basename() {
     [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
 }
 
+plugin_source_root() {
+    local checkout="$1"
+    if [[ -f "${checkout}/.opencode-plugin/plugin.json" ]]; then
+        printf '%s' "${checkout}/.opencode-plugin"
+    else
+        printf '%s' "${checkout}"
+    fi
+}
+
 declare -a DISABLED_PLUGINS=()
 contains() {
     local needle="$1" item
@@ -155,7 +164,7 @@ done < "${DISABLED_PLUGIN_SKILLS_FILE}"
 for ((index = 0; index < ${#DISABLED_PLUGINS[@]}; index++)); do
     plugin_name="${DISABLED_PLUGINS[${index}]}"
     registered_path_for "${plugin_name}"
-    plugin="${AGENTS_DIR}/${REGISTERED_PATH}"
+    plugin="$(plugin_source_root "${AGENTS_DIR}/${REGISTERED_PATH}")"
     [[ -d "${plugin}/skills" ]] || continue
     for skill in "${plugin}"/skills/*/; do
         [[ -f "${skill}/SKILL.md" ]] || continue
